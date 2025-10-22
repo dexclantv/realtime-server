@@ -1,8 +1,8 @@
 // server/index.js
-// DecipherAlgo Realtime Token Server + TikTok OAuth + Persona Merge
+// DecipherAlgo Realtime Token Server + TikTok OAuth
 // - Mints ephemeral tokens for OpenAI Realtime
 // - Handles TikTok OAuth (login/callback) and simple API fetches
-// - Lets you merge extra persona knowledge at runtime (founder playbook, FAQs, etc.)
+// - Bakes in Kira's persona + Founder Playbook so she "knows the app vision"
 
 import "dotenv/config";
 import express from "express";
@@ -10,34 +10,23 @@ import fetch from "node-fetch";
 import cors from "cors";
 
 const app = express();
-
-// ---------- CORS ----------
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
-app.use(
-  cors({
-    origin: ALLOWED_ORIGIN,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use(cors());
 app.use(express.json());
 
-// ---------- ENV ----------
+// ----- ENV -----
 const {
   OPENAI_API_KEY,
   PORT = 3000,
   HOST = "0.0.0.0",
 
-  // Persona spice (0..3)
+  // Persona spice (0..3): 0=no cussing, 1=minimal (default), 2=occasional, 3=spicy
   KIRA_SPICE = "1",
 
-  // Optional baked-in extras via env (multiline supported on Render)
-  KIRA_EXTRA = "",
-
-  // TikTok OAuth (fill these in on Render Dashboard > Environment)
+  // TikTok OAuth (optional; fill these on Render > Environment)
   TIKTOK_CLIENT_KEY,
   TIKTOK_CLIENT_SECRET,
   TIKTOK_REDIRECT_URI = "https://realtime-server-4szb.onrender.com/tiktok/callback",
+  // CSV of scopes requested in TikTok dev console
   TIKTOK_SCOPES = "user.info.basic,video.list",
 } = process.env;
 
@@ -45,22 +34,153 @@ if (!OPENAI_API_KEY) {
   console.warn("⚠️ Missing OPENAI_API_KEY");
 }
 
-// ============================================================================
-//                                Persona builder
-// ============================================================================
+// ----- Founder Playbook (concise) -----
+const FOUNDER_PLAYBOOK = `
+PRODUCT: DecipherAlgo (MVP) — “decipher your algorithm”
+GOAL: Help users understand the *kind* of content they consume by analyzing videos they save/like
+      (start with TikTok; later Instagram/Facebook).
+"DecipherAlgo is built to decode how people think — their “personal algorithms.”
+By analyzing their TikTok (and later Instagram, YouTube) videos, we reveal cognitive and emotional
+patterns through humor and deep insight.
+This app is the introspective twin to DexTracker — where DexTracker measures creator performance,
+DecipherAlgo measures the psychology behind their behavior."
+"Purpose:
+DecipherAlgo helps users understand their personal algorithm — the thought patterns and interests reflected in the videos and posts they engage with. It’s a light, insight-driven MVP designed to blend entertainment with self-awareness.
 
-// Runtime-merge store (in-memory; good for MVP)
-let runtimePersonaSections = [];
+Core Functionality
 
-/** Build base persona with cussing “spice” dial */
+How It Works:
+
+Connect a TikTok account (future support for Instagram, Facebook, and YouTube).
+
+Import and transcribe up to 10 user-selected videos (liked or saved).
+
+Analyze speech content to identify recurring topics, tone, and cognitive themes.
+
+Generate a fun or reflective “algorithm profile” summarizing the user’s media influence and thinking patterns.
+
+Output Personality:
+Results vary by content tone — humorous for chaotic/meme-heavy feeds, thoughtful for introspective content.
+
+Example Analysis Categories
+
+Levels of Thinking & Awareness
+
+Emotional & Moral Development
+
+Cognitive / Systems Thinking
+
+Communication & Relationship Dynamics
+
+Social Media Influence & Conditioning
+
+Empathy, Self-Reflection, and Metacognition
+
+Behavioral & Psychological Triggers
+
+Spiritual or Existential Reflection
+
+Feature Tiers
+
+Free Tier:
+
+Analyze & transcribe up to 10 videos
+
+Basic algorithm category breakdown
+
+Fun or humorous summary feedback
+
+Premium Tier:
+
+Deep cognitive and moral development insights
+
+“Algorithm Evolution” (historical trend tracking)
+
+Custom video reports and summaries
+
+Compare your algorithm with friends
+
+“Personality Overlay” (content fingerprint visualization)
+
+Unlimited scans + exportable reports
+
+Monetization Model
+
+Free: up to 10 video analyses
+
+Tier 1: 20 videos – $5.99
+
+Tier 2: 50 videos – $25.00
+
+Skip invalid or silent clips automatically until 10 valid are analyzed.
+
+Future Expansions
+
+Text & Context Analysis (“Thinking Lens” Tool):
+
+Analyze posts, captions, or messages to detect levels of thinking.
+
+Provide “AI Reflections” — rewrites from different perspectives.
+
+Generate growth prompts and a development map that tracks user progress over time.
+
+Social Fingerprinting: Compare how thinking differs by context (dating, work, social).
+
+Strategic Goals & Team Roles
+
+CTO: Ensure technical feasibility and optimize API usage.
+
+CFO: Forecast costs and margins per usage tier.
+
+CEO: Define vision, brand identity, and long-term differentiation.
+
+Marketing: Create viral positioning through humor and self-awareness.
+
+Research Tasks
+
+Identify competing “algorithm analysis” or “content reflection” apps.
+
+Evaluate their positioning and features.
+
+Determine DecipherAlgo’s unique edge in humor, self-insight, and AI-driven feedback."
+
+"DecipherAlgo Advantage:
+• Focuses on real human cognitive levels (awareness, moral, emotional, reflective).
+• Video-based analysis instead of text-only data.
+• Fun + serious dual-tone analysis (entertainment meets reflection).
+• Cross-context growth tracking (dating, self-awareness, relationships).
+• Built with OpenAI APIs, ensuring long-term performance, not hacks." 
+MVP FLOW:
+1) Connect TikTok (or import locally).
+2) Fetch up to 10 videos (cap free tier). Transcribe audio → analyze → summarize “your algorithm”.
+3) Funny, supportive tone; call out “brain-rot” vs. thoughtful content playfully.
+4) Output: brief summary + themes + “levels” (e.g., Thinking/Awareness, Moral Dev., Emotional Awareness,
+   Systems Thinking, Behavior Analysis, Communication Styles, Empathy/EQ, Conformity vs Individualism, etc.).
+5) Pricing (tentative): Free = 10 videos; 20 = $5.99; 50 = $25.
+
+DESIGN PRINCIPLES:
+- Fast, minimal, playful; never shaming; always helpful.
+- Be transparent: “transcribe → analyze → summarize”.
+- If a clip has music but no speech, note it and skip or classify.
+- Suggest next step (scan, import, connect, upgrade) only when useful.
+
+KIRA’S ROLE:
+- On voice requests: short, upbeat, slightly roasty guidance.
+- During scans: quick one-liners for steps; deeper summaries on demand.
+- Respect quotas/paywalls and never leak secrets/keys.
+
+FUTURE:
+- More platforms, smarter selection (≥60s, speech present), better tagging, coaching-style insights.
+`;
+
+// ----- Persona builder with cussing “spice” dial -----
 function persona(spice = Number(KIRA_SPICE)) {
-  const filters =
-    {
-      0: "Avoid cuss words entirely.",
-      1: "Minimal light swearing only (e.g., 'damn', 'hell') and only for humor.",
-      2: "Occasional casual swearing; keep it playful and PG-13.",
-      3: "Spicy but playful swearing allowed; never mean-spirited or explicit.",
-    }[spice] ?? "Minimal light swearing only.";
+  const filters = {
+    0: "Avoid cuss words entirely.",
+    1: "Minimal light swearing only (e.g., 'damn', 'hell') and only for humor.",
+    2: "Occasional casual swearing; keep it playful and PG-13.",
+    3: "Spicy but playful swearing allowed; never mean-spirited or explicit.",
+  }[spice] ?? "Minimal light swearing only.";
 
   return `
 You are **Kira**, an overly helpful, roast-style comedic AI assistant for the DecipherAlgo app.
@@ -75,88 +195,27 @@ ${filters}
 - Do not reveal secrets, keys, or private data.
 
 # App Mentorship
-- Help users navigate importing videos, starting scans, and reading reports.
+- Help users navigate importing videos, starting scans, reading reports.
 - Explain "Deciphering" simply: transcribe → analyze → summarize.
 - If a clip has music but no speech, call it out.
 
 # Narration Mode
 - On “explain_step” events, speak a short 1-liner status.
 
-# Context
-- TikTok connected if the user logs in; otherwise local imports.
-- Keep explanations short during scanning; expand on request.
+# Context (Founder Playbook)
+${FOUNDER_PLAYBOOK}
 `;
 }
 
-/** Merge base + baked extras + runtime extras into one instructions string */
-function buildInstructions() {
-  const base = persona();
-  const baked = KIRA_EXTRA?.trim() ? `\n\n## Extra (env)\n${KIRA_EXTRA.trim()}` : "";
-  const runtime =
-    runtimePersonaSections.length > 0
-      ? "\n\n## Extra (runtime)\n" +
-        runtimePersonaSections
-          .map((s, i) => `### ${s.title || `Section ${i + 1}`}\n${s.text || ""}`)
-          .join("\n\n")
-      : "";
-  return `${base}${baked}${runtime}`.trim();
-}
-
-// ============================================================================
-//                                Health + Root
-// ============================================================================
+// ----- Health + Root -----
 app.get("/", (_req, res) => {
   res
     .type("text/plain")
-    .send("DecipherAlgo Realtime server active. /health • /realtime-ephemeral • /persona • /tiktok/login");
+    .send("DecipherAlgo Realtime server active. /health • /realtime-ephemeral • /tiktok/login");
 });
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// ============================================================================
-//                                Persona API
-// ============================================================================
-
-/**
- * POST /persona/merge
- * Body: { sections: [{title?: string, text: string}, ...] }
- * Example:
- *  { "sections": [
- *      {"title":"Founder Playbook","text":"..."},
- *      {"title":"FAQs","text":"..."}
- *    ] }
- */
-app.post("/persona/merge", (req, res) => {
-  const sections = Array.isArray(req.body?.sections) ? req.body.sections : [];
-  const sanitized = sections
-    .map((s) => ({
-      title: String(s.title || "").slice(0, 120),
-      text: String(s.text || "").slice(0, 40000),
-    }))
-    .filter((s) => s.text.length > 0);
-
-  runtimePersonaSections.push(...sanitized);
-  return res.json({ ok: true, mergedCount: sanitized.length, totalSections: runtimePersonaSections.length });
-});
-
-/** POST /persona/clear */
-app.post("/persona/clear", (_req, res) => {
-  runtimePersonaSections = [];
-  return res.json({ ok: true, totalSections: 0 });
-});
-
-/** GET /persona (for debugging) */
-app.get("/persona", (_req, res) => {
-  res.json({
-    spice: Number(KIRA_SPICE),
-    bakedEnvExtra: KIRA_EXTRA?.trim()?.length ? true : false,
-    runtimeSections: runtimePersonaSections.map((s, i) => ({ idx: i, title: s.title || "" })),
-    preview: buildInstructions().slice(0, 1000) + "…",
-  });
-});
-
-// ============================================================================
-//                      OpenAI Realtime: mint ephemeral session
-// ============================================================================
+// ----- OpenAI Realtime: mint ephemeral session -----
 app.get("/realtime-ephemeral", async (req, res) => {
   try {
     if (!OPENAI_API_KEY) {
@@ -174,7 +233,7 @@ app.get("/realtime-ephemeral", async (req, res) => {
       body: JSON.stringify({
         model,
         voice,
-        instructions: buildInstructions(),
+        instructions: persona(), // <-- Kira + Founder Playbook baked in
       }),
     });
 
@@ -194,10 +253,10 @@ app.get("/realtime-ephemeral", async (req, res) => {
 });
 
 // ============================================================================
-//                                TikTok OAuth
+//                                TikTok OAuth (optional)
 // ============================================================================
 
-// In-memory "session" store keyed by state (good enough for MVP/dev)
+// In-memory "session" store keyed by state (ok for MVP/dev)
 const stateStore = new Map();
 
 // Helper: build TikTok authorize URL (OAuth v2)
@@ -233,7 +292,6 @@ app.get("/tiktok/callback", async (req, res) => {
   stateStore.delete(state);
 
   try {
-    // Exchange code for access token
     const tokenRes = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
@@ -252,7 +310,6 @@ app.get("/tiktok/callback", async (req, res) => {
       return res.status(500).json(tokenJson);
     }
 
-    // MVP confirmation page
     const mask = (t) => (t ? t.slice(0, 6) + "..." + t.slice(-4) : "<none>");
     res.type("html").send(`
       <html>
@@ -270,7 +327,7 @@ app.get("/tiktok/callback", async (req, res) => {
   }
 });
 
-// Who am I?
+// Step 3. Simple API helpers (call from your app with a bearer you store client-side)
 app.get("/tiktok/me", async (req, res) => {
   const accessToken = req.query.access_token;
   if (!accessToken) return res.status(400).json({ error: "Missing access_token" });
@@ -284,7 +341,6 @@ app.get("/tiktok/me", async (req, res) => {
   res.json(j);
 });
 
-// List my videos (posted). Liked/Saved require other scopes/products.
 app.get("/tiktok/videos", async (req, res) => {
   const accessToken = req.query.access_token;
   const cursor = req.query.cursor ?? "0";
@@ -304,14 +360,11 @@ app.get("/tiktok/videos", async (req, res) => {
   res.json(j);
 });
 
-// =============================================================================
+// ============================================================================
 
 app.listen(PORT, HOST, () => {
   console.log(`🚀 Realtime token server running on http://${HOST}:${PORT}`);
   console.log(`   Health:            http://${HOST}:${PORT}/health`);
   console.log(`   Realtime token:    http://${HOST}:${PORT}/realtime-ephemeral`);
-  console.log(`   Persona:           GET  ${HOST}:${PORT}/persona`);
-  console.log(`                      POST ${HOST}:${PORT}/persona/merge`);
-  console.log(`                      POST ${HOST}:${PORT}/persona/clear`);
   console.log(`   TikTok login:      http://${HOST}:${PORT}/tiktok/login`);
 });
